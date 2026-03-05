@@ -2,9 +2,9 @@ name: Build, Scan and Push
 
 on:
   push:
-    branches: [main]
+    branches: [main, matrix-build]
   pull_request:
-    branches: [main]
+    branches: [main, matrix-build]
 
 jobs:
   build-scan:
