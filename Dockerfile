@@ -1,11 +1,11 @@
-FROM dhi.io/python:3.13-alpine3.21-dev AS builder
+FROM dhi.io/python:3-alpine3.23-fips-dev AS builder
 
 WORKDIR /app
 
 COPY hello.py .
 
 # Runtime stage
-FROM dhi.io/python:3.13-alpine3.21
+FROM dhi.io/python:3.14-alpine3.23-fips
 
 WORKDIR /app
 

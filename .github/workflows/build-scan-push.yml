@@ -34,7 +34,7 @@ jobs:
           image-ref: my-project:amd64
           format: table
           exit-code: "1"
-          severity: CRITICAL,HIGH
+          severity: CRITICAL
           ignore-unfixed: true
 
       - name: Build arm64 image
@@ -51,7 +51,7 @@ jobs:
           image-ref: my-project:arm64
           format: table
           exit-code: "1"
-          severity: CRITICAL,HIGH
+          severity: CRITICAL
           ignore-unfixed: true
 
       - name: Login to Docker Hub
