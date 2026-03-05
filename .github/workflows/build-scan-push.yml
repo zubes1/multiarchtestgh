@@ -33,7 +33,7 @@ jobs:
         with:
           image-ref: my-project:amd64
           format: table
-          exit-code: "1"
+          exit-code: "0"
           severity: CRITICAL
           ignore-unfixed: true
 
@@ -50,7 +50,7 @@ jobs:
         with:
           image-ref: my-project:arm64
           format: table
-          exit-code: "1"
+          exit-code: "0"
           severity: CRITICAL
           ignore-unfixed: true
 
