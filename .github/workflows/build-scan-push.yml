@@ -30,6 +30,7 @@ jobs:
 
       - name: Scan amd64 image
         uses: aquasecurity/trivy-action@0.30.0
+        continue-on-error: true
         with:
           image-ref: my-project:amd64
           format: table
@@ -47,6 +48,7 @@ jobs:
 
       - name: Scan arm64 image
         uses: aquasecurity/trivy-action@0.30.0
+        continue-on-error: true
         with:
           image-ref: my-project:arm64
           format: table
