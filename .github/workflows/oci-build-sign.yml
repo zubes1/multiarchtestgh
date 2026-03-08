@@ -1,0 +1,170 @@
+name: OCI Build, Sign and Push
+
+on:
+  push:
+    branches: [main, oci-build-sign]
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/my-project
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Step 1 — Build and export as OCI layout to disk; nothing is pushed to the registry
+      - name: Build and export OCI layout
+        uses: docker/build-push-action@v6
+        with:
+          platforms: ${{ matrix.platform }}
+          outputs: type=oci,dest=/tmp/image-${{ matrix.arch }}.tar
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+
+      # Step 2 — Load the OCI archive into the local Docker daemon, then run a smoke test
+      - name: Load OCI layout into Docker daemon
+        run: |
+          skopeo copy \
+            oci-archive:/tmp/image-${{ matrix.arch }}.tar \
+            docker-daemon:my-project:test
+
+      - name: Test container
+        run: docker run --rm my-project:test
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Step 3 — Push by digest only; the image is uploaded to the registry but no tag
+      #           is created, so it is not yet pullable by name.
+      #           The build pulls entirely from the GHA cache written above.
+      - name: Push by digest
+        id: push
+        run: |
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --output "type=image,name=${{ env.IMAGE }},push-by-digest=true,push=true" \
+            --cache-from "type=gha,scope=${{ matrix.arch }}" \
+            --metadata-file /tmp/metadata-${{ matrix.arch }}.json \
+            .
+
+          DIGEST=$(jq -r '."containerimage.digest"' /tmp/metadata-${{ matrix.arch }}.json)
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/metadata-${{ matrix.arch }}.json
+          if-no-files-found: error
+
+  merge-sign-push:
+    name: Merge, Sign and Push
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      id-token: write  # required for keyless cosign signing via GitHub OIDC
+
+    steps:
+      - name: Download digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Read digests
+        id: digests
+        run: |
+          echo "amd64=$(jq -r '."containerimage.digest"' /tmp/digests/metadata-amd64.json)" >> $GITHUB_OUTPUT
+          echo "arm64=$(jq -r '."containerimage.digest"' /tmp/digests/metadata-arm64.json)" >> $GITHUB_OUTPUT
+
+      # Step 4 — Merge the two platform-specific digests (from the native builders)
+      #           into a single multi-platform image index. A temporary tag is used so
+      #           we can resolve the index digest before signing or publishing :latest.
+      - name: Create image index from platform digests
+        id: index
+        run: |
+          TEMP_TAG="${{ env.IMAGE }}:index-${{ github.sha }}"
+
+          docker buildx imagetools create \
+            --tag "$TEMP_TAG" \
+            "${{ env.IMAGE }}@${{ steps.digests.outputs.amd64 }}" \
+            "${{ env.IMAGE }}@${{ steps.digests.outputs.arm64 }}"
+
+          INDEX_DIGEST=$(docker buildx imagetools inspect \
+            --format '{{.Manifest.Digest}}' "$TEMP_TAG")
+
+          echo "digest=$INDEX_DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Step 5 — Sign the image index using keyless signing (GitHub OIDC).
+      #           Referenced by digest so the signature binds to the exact content.
+      - name: Sign image index
+        run: |
+          cosign sign --yes \
+            "${{ env.IMAGE }}@${{ steps.index.outputs.digest }}"
+
+      # Step 6 — cosign sign pushes the signature to the registry automatically as an
+      #           OCI referrer artifact attached to the image index digest.
+
+      # Step 7 — Publish the image index under the final :latest tag by copying the
+      #           signed digest; no rebuild occurs.
+      - name: Push image index tag
+        run: |
+          skopeo copy \
+            "docker://${{ env.IMAGE }}@${{ steps.index.outputs.digest }}" \
+            "docker://${{ env.IMAGE }}:latest"
+
+      # Step 8 — Pull the tag from the registry and confirm the digest matches the index
+      #           digest we signed, ensuring no substitution occurred.
+      - name: Verify image index digest
+        run: |
+          EXPECTED="${{ steps.index.outputs.digest }}"
+          ACTUAL=$(docker buildx imagetools inspect \
+            --format '{{.Manifest.Digest}}' \
+            "${{ env.IMAGE }}:latest")
+
+          echo "Expected: $EXPECTED"
+          echo "Actual:   $ACTUAL"
+
+          [ "$EXPECTED" = "$ACTUAL" ] \
+            || { echo "ERROR: digest mismatch — aborting"; exit 1; }
+
+          echo "Digest verified successfully."
