@@ -129,8 +129,8 @@ jobs:
             "${{ env.IMAGE }}@${{ steps.digests.outputs.amd64 }}" \
             "${{ env.IMAGE }}@${{ steps.digests.outputs.arm64 }}"
 
-          INDEX_DIGEST=$(docker buildx imagetools inspect \
-            --format '{{.Manifest.Digest}}' "$TEMP_TAG")
+          INDEX_DIGEST=$(docker buildx imagetools inspect "$TEMP_TAG" \
+            --format '{{json .Manifest}}' | jq -r '.digest')
 
           echo "digest=$INDEX_DIGEST" >> $GITHUB_OUTPUT
 
@@ -160,9 +160,8 @@ jobs:
       - name: Verify image index digest
         run: |
           EXPECTED="${{ steps.index.outputs.digest }}"
-          ACTUAL=$(docker buildx imagetools inspect \
-            --format '{{.Manifest.Digest}}' \
-            "${{ env.IMAGE }}:latest")
+          ACTUAL=$(docker buildx imagetools inspect "${{ env.IMAGE }}:latest" \
+            --format '{{json .Manifest}}' | jq -r '.digest')
 
           echo "Expected: $EXPECTED"
           echo "Actual:   $ACTUAL"
