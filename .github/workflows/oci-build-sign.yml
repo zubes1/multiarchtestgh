@@ -50,7 +50,6 @@ jobs:
           platforms: ${{ matrix.platform }}
           load: true
           tags: my-project:test
-          cache-from: type=gha,scope=${{ matrix.arch }}
 
       - name: Test container
         run: docker run --rm my-project:test
@@ -63,14 +62,13 @@ jobs:
 
       # Step 3 — Push by digest only; the image is uploaded to the registry but no tag
       #           is created, so it is not yet pullable by name.
-      #           The build pulls entirely from the GHA cache written above.
+      #           No cache flags needed — BuildKit reuses the local daemon cache from step 1.
       - name: Push by digest
         id: push
         run: |
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --output "type=image,name=${{ env.IMAGE }},push-by-digest=true,push=true" \
-            --cache-from "type=gha,scope=${{ matrix.arch }}" \
             --metadata-file /tmp/metadata-${{ matrix.arch }}.json \
             .
 
