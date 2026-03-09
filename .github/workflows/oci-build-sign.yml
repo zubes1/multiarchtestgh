@@ -42,12 +42,15 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,scope=${{ matrix.arch }},mode=max
 
-      # Step 2 — Load the OCI archive into the local Docker daemon, then run a smoke test
-      - name: Load OCI layout into Docker daemon
-        run: |
-          skopeo copy \
-            oci-archive:/tmp/image-${{ matrix.arch }}.tar \
-            docker-daemon:my-project:test
+      # Step 2 — Load the OCI layout into the local Docker daemon via the GHA cache,
+      #           then run a smoke test. No rebuild occurs — this is a pure cache hit.
+      - name: Load image into Docker daemon
+        uses: docker/build-push-action@v6
+        with:
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: my-project:test
+          cache-from: type=gha,scope=${{ matrix.arch }}
 
       - name: Test container
         run: docker run --rm my-project:test
@@ -144,13 +147,13 @@ jobs:
       # Step 6 — cosign sign pushes the signature to the registry automatically as an
       #           OCI referrer artifact attached to the image index digest.
 
-      # Step 7 — Publish the image index under the final :latest tag by copying the
-      #           signed digest; no rebuild occurs.
+      # Step 7 — Publish the image index under the final :latest tag.
+      #           imagetools create with a single @digest source retags without rebuilding.
       - name: Push image index tag
         run: |
-          skopeo copy \
-            "docker://${{ env.IMAGE }}@${{ steps.index.outputs.digest }}" \
-            "docker://${{ env.IMAGE }}:latest"
+          docker buildx imagetools create \
+            --tag "${{ env.IMAGE }}:latest" \
+            "${{ env.IMAGE }}@${{ steps.index.outputs.digest }}"
 
       # Step 8 — Pull the tag from the registry and confirm the digest matches the index
       #           digest we signed, ensuring no substitution occurred.
